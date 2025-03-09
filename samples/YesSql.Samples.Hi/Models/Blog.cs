@@ -6,6 +6,7 @@ namespace YesSql.Samples.Hi.Models
     [RelationContainer]
     public class Blog
     {
+        public long Id { get; set; }
         public string Title { get; set; }
         [ReferencedProperty]
         public IEnumerable<BlogPost> Posts { get; set; }

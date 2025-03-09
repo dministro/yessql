@@ -25,7 +25,6 @@ namespace YesSql.Serialization
         {
             var jsonDictionary = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(ref reader, options);
             var item = Activator.CreateInstance(typeToConvert);
-            var namingPolicy = options.PropertyNamingPolicy ?? JsonNamingPolicy.CamelCase;
 
             foreach (var property in typeToConvert.GetProperties())
             {
@@ -43,7 +42,7 @@ namespace YesSql.Serialization
                 var referenceAttribute = property.GetCustomAttribute<ReferencedPropertyAttribute>(false);
                 if (referenceAttribute is null)
                 {
-                    if (!jsonDictionary.TryGetValue(namingPolicy.ConvertName(property.Name), out var propertyValue))
+                    if (!jsonDictionary.TryGetValue(ConvertPropertyName(options.PropertyNamingPolicy, property.Name), out var propertyValue))
                     {
                         continue;
                     }
@@ -53,7 +52,7 @@ namespace YesSql.Serialization
                     continue;
                 }
 
-                if (!jsonDictionary.TryGetValue($"$_{namingPolicy.ConvertName(property.Name)}_ref", out var referencedValue))
+                if (!jsonDictionary.TryGetValue(ConvertReferencePropertyName(options.PropertyNamingPolicy, property.Name), out var referencedValue))
                 {
                     property.SetValue(item, null);
 
@@ -83,8 +82,6 @@ namespace YesSql.Serialization
 
         public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
         {
-            var namingPolicy = options.PropertyNamingPolicy ?? JsonNamingPolicy.CamelCase;
-
             writer.WriteStartObject();
 
             foreach (var property in value.GetType().GetProperties())
@@ -109,7 +106,7 @@ namespace YesSql.Serialization
                 var referenceAttribute = property.GetCustomAttribute<ReferencedPropertyAttribute>(false);
                 if (referenceAttribute is null)
                 {
-                    writer.WritePropertyName(namingPolicy.ConvertName(property.Name));
+                    writer.WritePropertyName(ConvertPropertyName(options.PropertyNamingPolicy, property.Name));
                     JsonSerializer.Serialize(writer, propertyValue, options);
 
                     continue;
@@ -117,7 +114,7 @@ namespace YesSql.Serialization
 
                 WriteReferenceProperty(
                     writer,
-                    namingPolicy,
+                    options.PropertyNamingPolicy,
                     property,
                     referenceAttribute.Collection,
                     propertyValue);
@@ -171,7 +168,7 @@ namespace YesSql.Serialization
             string collection,
             object value)
         {
-            writer.WritePropertyName($"$_{namingPolicy.ConvertName(property.Name)}_ref");
+            writer.WritePropertyName(ConvertReferencePropertyName(namingPolicy, property.Name));
 
             if (value is null)
             {
@@ -207,5 +204,11 @@ namespace YesSql.Serialization
                 writer.WriteNumberValue(id);
             }
         }
+
+        private static string ConvertPropertyName(JsonNamingPolicy namingPolicy, string propertyName) =>
+            namingPolicy?.ConvertName(propertyName) ?? propertyName;
+
+        private static string ConvertReferencePropertyName(JsonNamingPolicy namingPolicy, string propertyName) =>
+            $"$_{ConvertPropertyName(namingPolicy, propertyName)}_ref";
     }
 }

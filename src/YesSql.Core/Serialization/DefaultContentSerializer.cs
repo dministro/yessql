@@ -53,8 +53,9 @@ namespace YesSql.Serialization
                 NumberHandling = _options.NumberHandling,
                 PropertyNameCaseInsensitive = _options.PropertyNameCaseInsensitive,
                 PropertyNamingPolicy = _options.PropertyNamingPolicy,
-
                 ReadCommentHandling = _options.ReadCommentHandling,
+                ReferenceHandler = _options.ReferenceHandler,
+                UnknownTypeHandling = _options.UnknownTypeHandling,
                 WriteIndented = _options.WriteIndented,
             };
 

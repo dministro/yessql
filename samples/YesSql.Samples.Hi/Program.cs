@@ -83,9 +83,26 @@ namespace YesSql.Samples.Hi
 
             await using (var session = store.CreateSession())
             {
+                var postAddedAfterLoad = new BlogPost
+                {
+                    Title = "Added to loaded post",
+                    Author = "Annonimous",
+                    Content = "I'll be saved together with the blog.",
+                    PublishedUtc = DateTime.UtcNow,
+                    Tags = new[] { "Hello", "YesSql" },
+                };
+
                 var blogs = (await session.Query<Blog>()
                     .ListAsync())
                     .ToList();
+
+                foreach (var loadedBlog in blogs)
+                {
+                    loadedBlog.Posts = loadedBlog.Posts.Concat([postAddedAfterLoad]);
+                    await session.SaveAsync(loadedBlog);
+                }
+
+                await session.SaveChangesAsync();
             }
 
             // loading a single blog post
