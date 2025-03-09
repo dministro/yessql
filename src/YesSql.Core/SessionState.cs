@@ -9,6 +9,9 @@ namespace YesSql
         internal Dictionary<IndexDescriptor, List<MapState>> _maps;
         public Dictionary<IndexDescriptor, List<MapState>> Maps => _maps ??= new Dictionary<IndexDescriptor, List<MapState>>();
 
+        internal Dictionary<long, object> _resolvedObjects;
+        public Dictionary<long, object> ResolvedObjects => _resolvedObjects ??= new Dictionary<long, object>();
+
         internal IdentityMap _identityMap;
         public IdentityMap IdentityMap => _identityMap ??= new IdentityMap();
 

@@ -13,6 +13,11 @@ namespace YesSql.Indexes
             return _entities.TryGetValue(item, out id);
         }
 
+        public long GetDocumentId(object item)
+        {
+            return _entities[item];
+        }
+
         public bool TryGetEntityById(long id, out object document)
         {
             return _documentIds.TryGetValue(id, out document);

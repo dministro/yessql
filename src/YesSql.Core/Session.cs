@@ -1,17 +1,22 @@
 using Dapper;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using YesSql.Attributes;
 using YesSql.Commands;
 using YesSql.Data;
+using YesSql.Extensions;
 using YesSql.Indexes;
 using YesSql.Services;
+using static Dapper.SqlMapper;
 
 namespace YesSql
 {
@@ -97,6 +102,8 @@ namespace YesSql
 
             CheckDisposed();
 
+            await SaveReferencedDocuments(entity, checkConcurrency, collection);
+
             // already being saved or updated or tracked?
             if (state.Saved.Contains(entity) || state.Updated.Contains(entity))
             {
@@ -175,7 +182,6 @@ namespace YesSql
             var doc = new Document
             {
                 Type = Store.TypeNames[entity.GetType()],
-                Content = Store.Configuration.ContentSerializer.Serialize(entity)
             };
 
             // Import version
@@ -199,33 +205,35 @@ namespace YesSql
 
                 doc.Id = id;
                 state.IdentityMap.AddDocument(doc);
-
-                return true;
             }
             else
             {
                 // Does it have a valid identifier?
                 var accessor = _store.GetIdAccessor(entity.GetType());
-                if (accessor != null)
+                if (accessor is null)
                 {
-                    id = accessor.Get(entity);
+                    throw new InvalidOperationException("Objects without an 'Id' property can't be imported if no 'id' argument is provided.");
+                }
 
-                    if (id > 0)
-                    {
-                        state.IdentityMap.AddEntity(id, entity);
-                        state.Updated.Add(entity);
+                id = accessor.Get(entity);
 
-                        doc.Id = id;
-                        state.IdentityMap.AddDocument(doc);
-
-                        return true;
-                    }
-
+                if (id <= 0)
+                {
                     throw new InvalidOperationException($"Invalid 'Id' value: {id}");
                 }
 
-                throw new InvalidOperationException("Objects without an 'Id' property can't be imported if no 'id' argument is provided.");
+                state.IdentityMap.AddEntity(id, entity);
+                state.Updated.Add(entity);
+
+                doc.Id = id;
+                state.IdentityMap.AddDocument(doc);
             }
+
+            doc.Content = Store.Configuration.ContentSerializer.Serialize(
+                entity,
+                (collection, entity) => GetState(collection).IdentityMap.GetDocumentId(entity));
+
+            return true;
         }
 
         public void Detach(object entity, string collection)
@@ -261,6 +269,7 @@ namespace YesSql
             state._tracked?.Clear();
             state._deleted?.Clear();
             state._identityMap?.Clear();
+            state._resolvedObjects?.Clear();
         }
 
         public async Task ResetAsync()
@@ -281,6 +290,45 @@ namespace YesSql
             if (state.IdentityMap.TryGetDocumentId(entity, out var id))
             {
                 state.IdentityMap.Remove(id, entity);
+            }
+        }
+
+        private async Task SaveReferencedDocuments(object entity, bool checkConcurrency = false, string collection = null)
+        {
+            ArgumentNullException.ThrowIfNull(entity);
+
+            var entityType = entity.GetType();
+            if (entityType.HasAttribute<RelationContainerAttribute>() is not true)
+            {
+                return;
+            }
+
+            var entries = entityType.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                .Where(property => property.HasAttribute<ReferencedPropertyAttribute>())
+                .Select(property => (Property: property, Value: property.GetValue(entity)))
+                .Where(value => value.Value is not null)
+                .Select(entry =>
+                {
+                    if (entry.Value.GetType().IsAssignableFrom(typeof(IDictionary<,>)))
+                    {
+                        throw new NotSupportedException();
+                    }
+                    else if (entry.Value is IEnumerable enumerable)
+                    {
+                        return (entry.Property, Value: enumerable.OfType<object>());
+                    }
+
+                    return (entry.Property, Value: [entry.Value]);
+                });
+
+            foreach (var entry in entries)
+            {
+                var referenceAttribute = entry.Property.GetCustomAttribute<ReferencedPropertyAttribute>(false);
+
+                foreach (var referencedEntity in entry.Value)
+                {
+                    await SaveAsync(referencedEntity, checkConcurrency, referenceAttribute.Collection);
+                }
             }
         }
 
@@ -327,7 +375,9 @@ namespace YesSql
 
             versionAccessor?.Set(entity, doc.Version);
 
-            doc.Content = Store.Configuration.ContentSerializer.Serialize(entity);
+            doc.Content = Store.Configuration.ContentSerializer.Serialize(
+                entity,
+                (collection, entity) => GetState(collection).IdentityMap.GetDocumentId(entity));
 
             _commands ??= [];
 
@@ -370,7 +420,9 @@ namespace YesSql
                 }
             }
 
-            var newContent = Store.Configuration.ContentSerializer.Serialize(entity);
+            var newContent = Store.Configuration.ContentSerializer.Serialize(
+                entity,
+                (collection, entity) => GetState(collection).IdentityMap.GetDocumentId(entity));
 
             // if the document has already been updated or saved with this session (auto or intentional flush), ensure it has 
             // been changed before doing another query
@@ -404,11 +456,16 @@ namespace YesSql
                 {
                     versionAccessor.Set(entity, oldDoc.Version);
 
-                    newContent = Store.Configuration.ContentSerializer.Serialize(entity);
+                    newContent = Store.Configuration.ContentSerializer.Serialize(
+                        entity,
+                        (collection, entity) => GetState(collection).IdentityMap.GetDocumentId(entity));
                 }
             }
 
-            var oldObj = Store.Configuration.ContentSerializer.Deserialize(oldDoc.Content, entity.GetType());
+            var oldObj = Store.Configuration.ContentSerializer.Deserialize(
+                oldDoc.Content,
+                entity.GetType(),
+                (collection, id) => ResolveObjectByIdAsync(id, collection).GetAwaiter().GetResult());
 
             // Update map index
             await MapDeleted(oldDoc, oldObj, collection);
@@ -422,6 +479,29 @@ namespace YesSql
             _commands ??= [];
 
             _commands.Add(new UpdateDocumentCommand(oldDoc, Store, version, collection));
+        }
+
+        private async Task<object> ResolveObjectByIdAsync(long id, string collection)
+        {
+            var state = GetState(collection);
+
+            if (state.ResolvedObjects.TryGetValue(id, out var result))
+            {
+                return result;
+            }
+
+            var doc = await GetDocumentByIdAsync(id, collection);
+
+            var objectType = Type.GetType(doc.Type);
+
+            state.ResolvedObjects.Add(
+                id,
+                Store.Configuration.ContentSerializer.Deserialize(
+                doc.Content,
+                objectType,
+                (collection, id) => ResolveObjectByIdAsync(id, collection).GetAwaiter().GetResult()));
+
+            return state.ResolvedObjects[id];
         }
 
         private async Task<Document> GetDocumentByIdAsync(long id, string collection)
@@ -591,11 +671,17 @@ namespace YesSql
 
                         accessor = _store.GetIdAccessor(itemType);
 
-                        item = (T)Store.Configuration.ContentSerializer.Deserialize(d.Content, itemType);
+                        item = (T)Store.Configuration.ContentSerializer.Deserialize(
+                            d.Content,
+                            itemType,
+                            (collection, id) => ResolveObjectByIdAsync(id, collection).GetAwaiter().GetResult());
                     }
                     else
                     {
-                        item = (T)Store.Configuration.ContentSerializer.Deserialize(d.Content, typeof(T));
+                        item = (T)Store.Configuration.ContentSerializer.Deserialize(
+                            d.Content,
+                            typeof(T),
+                            (collection, id) => ResolveObjectByIdAsync(id, collection).GetAwaiter().GetResult());
 
                         accessor = defaultAccessor;
                     }
@@ -798,6 +884,7 @@ namespace YesSql
                     state.Updated.Clear();
                     state.Deleted.Clear();
                     state.Maps.Clear();
+                    state.ResolvedObjects.Clear();
                 }
 
                 _commands?.Clear();
@@ -1000,6 +1087,7 @@ namespace YesSql
                 state._tracked?.Clear();
                 state._deleted?.Clear();
                 state._maps?.Clear();
+                state._resolvedObjects?.Clear();
 
                 // Clear the identity map as we don't want to return stale data after committing some changes.
                 // We assume the identity map is part of the unit-of-work.
@@ -1042,6 +1130,7 @@ namespace YesSql
                 state._tracked?.Clear();
                 state._deleted?.Clear();
                 state._maps?.Clear();
+                state._resolvedObjects?.Clear();
             }
 
             _commands?.Clear();

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace YesSql.Samples.Hi.Models
 {

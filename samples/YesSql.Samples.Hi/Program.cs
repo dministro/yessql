@@ -1,9 +1,9 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
-using YesSql.Provider.SqlServer;
+using YesSql.Provider.Sqlite;
 using YesSql.Samples.Hi.Indexes;
 using YesSql.Samples.Hi.Models;
-using YesSql.Sql;
 
 namespace YesSql.Samples.Hi
 {
@@ -18,11 +18,9 @@ namespace YesSql.Samples.Hi
         {
             var store = await StoreFactory.CreateAndInitializeAsync(
                 new Configuration()
-                    .UseSqlServer(@"Data Source =.; Initial Catalog = yessql; Integrated Security = True")
-                    .SetTablePrefix("Hi")
-                );
+                    .UseSqLite(@"Data Source=yessql.db;Mode=ReadWriteCreate;Cache=Shared;Pooling=True"));
 
-            await using (var connection = store.Configuration.ConnectionFactory.CreateConnection())
+            /*await using (var connection = store.Configuration.ConnectionFactory.CreateConnection())
             {
                 await connection.OpenAsync();
 
@@ -39,7 +37,8 @@ namespace YesSql.Samples.Hi
                 );
 
                 await transaction.CommitAsync();
-            };
+            }
+            ;*/
 
             // register available indexes
             store.RegisterIndexes<BlogPostIndexProvider>();
@@ -51,14 +50,42 @@ namespace YesSql.Samples.Hi
                 Author = "Bill",
                 Content = "Hello",
                 PublishedUtc = DateTime.UtcNow,
-                Tags = new[] { "Hello", "YesSql" }
+                Tags = new[] { "Hello", "YesSql" },
+            };
+
+            var postNotSaved = new BlogPost
+            {
+                Title = "Not Saved",
+                Author = "Annonimous",
+                Content = "I'll be saved together with the blog.",
+                PublishedUtc = DateTime.UtcNow,
+                Tags = new[] { "Hello", "YesSql" },
+            };
+
+            var blog = new Blog
+            {
+                Title = "My blog site",
+                Posts =
+                [
+                    post,
+                    postNotSaved,
+                ],
+                Highlighted = postNotSaved,
             };
 
             // saving the post to the database
             await using (var session = store.CreateSession())
             {
                 await session.SaveAsync(post);
+                await session.SaveAsync(blog);
                 await session.SaveChangesAsync();
+            }
+
+            await using (var session = store.CreateSession())
+            {
+                var blogs = (await session.Query<Blog>()
+                    .ListAsync())
+                    .ToList();
             }
 
             // loading a single blog post

@@ -13,7 +13,7 @@ namespace YesSql
         /// </summary>
         /// <param name="item">The object to serialize.</param>
         /// <returns>The serialized object.</returns>
-        string Serialize(object item);
+        string Serialize(object item, Func<string, object, long> idResolver);
 
         /// <summary>
         /// Deserializes an object from a string.
@@ -21,6 +21,6 @@ namespace YesSql
         /// <param name="content">The <see cref="String" /> instance representing the object to deserialize.</param>
         /// <param name="type">The type of the object to deserialize.</param>
         /// <returns>The deserialized object.</returns>
-        object Deserialize(string content, Type type);
+        object Deserialize(string content, Type type, Func<string, long, object> objectResolver);
     }
 }
