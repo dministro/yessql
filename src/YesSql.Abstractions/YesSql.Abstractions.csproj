@@ -1,4 +1,7 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+      <TargetFrameworks>net9.0</TargetFrameworks>
+    </PropertyGroup>
     <ItemGroup>
         <!-- Latest minimum LTS version. We don't want to force a higher version to applications -->
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
