@@ -115,7 +115,7 @@ namespace YesSql.Samples.Hi
             // loading blog posts by author
             await using (var session = store.CreateSession())
             {
-                var ps = await session.Query<BlogPost, BlogPostByAuthor>().Where(x => x.Author.StartsWith("B")).ListAsync();
+                var ps = await session.Query<BlogPost, BlogPostByAuthor>().Where(x => x.Author.StartsWith('B')).ListAsync();
 
                 foreach (var p in ps)
                 {
